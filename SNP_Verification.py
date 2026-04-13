@@ -100,6 +100,8 @@ def parse_config():
             # Ensure output folder path ends with /
             output_folder = arg if arg.endswith('/') else arg + '/'
             config['FOLDERS']['MAIN_OUTPUT_FOLDER'] = output_folder
+            # Store output prefix for naming files (basename without trailing slash)
+            config['FULL_FILE_NAMES']['OUTPUT_PREFIX'] = os.path.basename(arg.rstrip('/'))
         elif opt == "-a":
             if i == 0:
                 config.read(configFile)
@@ -160,18 +162,24 @@ def parse_config():
                                                 config['FOLDERS']['DETAILED_FOLDER'])
     config['FOLDERS']['TEMP'] = os.path.dirname(config['TEMP_FILES']['TEMP_BAM_SORTED'])
 
+    # Get output prefix for naming files (defaults to sample name if -o not specified)
+    output_prefix = config['FULL_FILE_NAMES'].get('OUTPUT_PREFIX', config['FULL_FILE_NAMES']['SAMPLE'])
+    
+    # Use output prefix in count matrix filename
     config['FULL_FILE_NAMES']['COUNT_MATRIX_FINAL'] = (config['FOLDERS']['MAIN_OUTPUT_FOLDER'] + 
-                                                    config['OUTPUT_FILES']['COUNT_MATRIX_FINAL'])
+                                                    output_prefix + '_' + config['OUTPUT_FILES']['COUNT_MATRIX_FINAL'])
+    
+    # Use output prefix in type output filenames
     config['FULL_FILE_NAMES']['NTYPE_OUTPUT'] = (config['FOLDERS']['SAMPLE_OUTPUT'] + 
-                                                config['OUTPUT_FILES']['NORMAL_TYPE_OUTPUT'])
+                                                output_prefix + '_' + config['OUTPUT_FILES']['NORMAL_TYPE_OUTPUT'])
     config['FULL_FILE_NAMES']['FTYPE_OUTPUT'] = (config['FOLDERS']['SAMPLE_OUTPUT'] + 
-                                                config['OUTPUT_FILES']['FRAMESHIFT_TYPE_OUTPUT'])
+                                                output_prefix + '_' + config['OUTPUT_FILES']['FRAMESHIFT_TYPE_OUTPUT'])
     config['FULL_FILE_NAMES']['HTYPE_OUTPUT'] = (config['FOLDERS']['SAMPLE_OUTPUT'] + 
-                                                config['OUTPUT_FILES']['HYPERSUSCEPTIBLE_TYPE_OUTPUT'])
+                                                output_prefix + '_' + config['OUTPUT_FILES']['HYPERSUSCEPTIBLE_TYPE_OUTPUT'])
     config['FULL_FILE_NAMES']['STYPE_OUTPUT'] = (config['FOLDERS']['SAMPLE_OUTPUT'] + 
-                                                config['OUTPUT_FILES']['SUPPRESSIBLE_TYPE_OUTPUT'])
+                                                output_prefix + '_' + config['OUTPUT_FILES']['SUPPRESSIBLE_TYPE_OUTPUT'])
     config['FULL_FILE_NAMES']['ITYPE_OUTPUT'] = (config['FOLDERS']['SAMPLE_OUTPUT'] + 
-                                                config['OUTPUT_FILES']['INTRINSIC_TYPE_OUTPUT'])
+                                                output_prefix + '_' + config['OUTPUT_FILES']['INTRINSIC_TYPE_OUTPUT'])
     return (config, argList)
 
 def dir_check(config):
@@ -402,9 +410,12 @@ def create_output(config, argList, gene_variant_dict):
         # Retrieve count matrix data
         countMatrix = pd.read_csv(config['SOURCE_FILES']['COUNT_MATRIX']) if config.getboolean('SETTINGS', 'AMRPLUSPLUS') else None
 
+        # Get output prefix for naming files
+        output_prefix = config['FULL_FILE_NAMES'].get('OUTPUT_PREFIX', config['FULL_FILE_NAMES']['SAMPLE'])
+
         # Create new output file for resistant reads if requested
         if config.getboolean('SETTINGS', 'READS'):
-            with open(config['FOLDERS']['SAMPLE_OUTPUT'] + 'resistant_reads' + ".csv", "w") as readsOutput:
+            with open(config['FOLDERS']['SAMPLE_OUTPUT'] + output_prefix + '_resistant_reads.csv', "w") as readsOutput:
                 readsOutput.write("Gene Header, List of Reads\n")
 
         # Run through results
@@ -432,12 +443,12 @@ def create_output(config, argList, gene_variant_dict):
 
             # Print more detailed output if requested
             if config.getboolean('SETTINGS', 'DETAILED') and (gene.getOutputInfo()[0] > 0):
-                with open(config['FOLDERS']['SAMPLE_DETAILED_OUTPUT'] + name + ".csv", "w") as detailedOutput:
+                with open(config['FOLDERS']['SAMPLE_DETAILED_OUTPUT'] + output_prefix + '_' + name + ".csv", "w") as detailedOutput:
                     gene.writeAdditionalInfo(detailedOutput)
 
             # Print resistant reads if requested
             if config.getboolean('SETTINGS', 'READS') and (gene.getOutputInfo()[0] > 0):
-                with open(config['FOLDERS']['SAMPLE_OUTPUT'] + 'resistant_reads' + ".csv", "a") as readsOutput:
+                with open(config['FOLDERS']['SAMPLE_OUTPUT'] + output_prefix + '_resistant_reads.csv', "a") as readsOutput:
                     gene.writeResistantReads(readsOutput)
             
             gene.clearOutputInfo()
@@ -465,13 +476,13 @@ def create_output(config, argList, gene_variant_dict):
                     countMatrix.loc[idx, sample_col] = 0
             
             # Write gene coverage stats to CSV file
-            gene_stats_file = config['FOLDERS']['SAMPLE_OUTPUT'] + 'snp_coverage_stats.csv'
+            gene_stats_file = config['FOLDERS']['SAMPLE_OUTPUT'] + output_prefix + '_snp_coverage_stats.csv'
             if 'gene_stats' in stats and len(stats['gene_stats']) > 0:
                 gene_stats_df = pd.DataFrame(stats['gene_stats'])
                 gene_stats_df.to_csv(gene_stats_file, index=False)
             
             # Write summary stats to CSV file
-            summary_file = config['FOLDERS']['SAMPLE_OUTPUT'] + 'snp_verification_summary.csv'
+            summary_file = config['FOLDERS']['SAMPLE_OUTPUT'] + output_prefix + '_snp_verification_summary.csv'
             summary_data = {
                 'sample_name': [sample_col],
                 'genes_in_snpinfo_database': [len(gene_variant_dict)],

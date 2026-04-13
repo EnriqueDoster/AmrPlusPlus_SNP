@@ -13,6 +13,27 @@ This document describes all modifications made to the AmrPlusPlus_SNP verificati
 | Bug Fix #3 | Fixed path handling for `--count_matrix` and `-o` arguments |
 | New Feature | Percentage-based count calculation with SNP position coverage tracking |
 | New Feature | CSV output files for gene coverage statistics and run summary |
+| New Feature | Output files now include `-o` flag name as prefix |
+
+---
+
+## Output File Naming
+
+All output files now include the name from the `-o` flag as a prefix. For example, if you run:
+
+```bash
+python3 SNP_Verification.py -o my_sample_output -i reads.bam --count_matrix counts.csv
+```
+
+The output files will be named:
+- `my_sample_output/my_sample_output_AMR_analytic_matrix.csv` (count matrix)
+- `my_sample_output/<sample>/my_sample_output_NormalOutput.csv` (N-type output)
+- `my_sample_output/<sample>/my_sample_output_snp_coverage_stats.csv`
+- `my_sample_output/<sample>/my_sample_output_snp_verification_summary.csv`
+- `my_sample_output/<sample>/my_sample_output_resistant_reads.csv`
+- `my_sample_output/<sample>/detailed/my_sample_output_<gene_name>.csv` (detailed outputs)
+
+This makes it easier to identify output files when processing multiple samples.
 
 ---
 
