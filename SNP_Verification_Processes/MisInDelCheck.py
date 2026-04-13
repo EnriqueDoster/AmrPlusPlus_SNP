@@ -6,6 +6,9 @@ def MisInDelCheck(read, gene, mapOfInterest, seqOfInterest, config):
     def missenseCheck(mtInfo, nonstop = False):
         res = 0
         if (mapOfInterest.get(mtInfo[1]-1,False)) != False:
+            # NEW: Mark that this read covers at least one SNP position
+            gene.markReadCoveredSNP()
+            
             for mt in mtInfo[2]:
                 firstAndLastTupleIndex = [0,len(mapOfInterest[mtInfo[1]-1]) - 1]
                 tupleIndex = -1
@@ -70,6 +73,8 @@ def MisInDelCheck(read, gene, mapOfInterest, seqOfInterest, config):
             if len(mtInfo[0])  > 1:
                 if (mapOfInterest.get(mtInfo[1][0]-1,False)) == False:
                     continue
+                # NEW: Mark that this read covers at least one SNP position
+                gene.markReadCoveredSNP()
                 for queryIndex in tuple(mapOfInterest[mtInfo[1][0]-1]):
                     if queryIndex == '-': continue
                     if len(mtInfo[1]) > 1:
@@ -106,6 +111,8 @@ def MisInDelCheck(read, gene, mapOfInterest, seqOfInterest, config):
             else:
                 if (mapOfInterest.get(mtInfo[1][0]-1,False)) == False:
                     continue
+                # NEW: Mark that this read covers at least one SNP position
+                gene.markReadCoveredSNP()
                 for queryIndex in tuple(mapOfInterest[mtInfo[1][0]-1]):
                     if queryIndex == '-': continue
                     if mtInfo[0][0] == seqOfInterest[queryIndex]:          #should be first of inserted residue
@@ -131,6 +138,8 @@ def MisInDelCheck(read, gene, mapOfInterest, seqOfInterest, config):
                 delMut = 0
                 if (mapOfInterest.get(pos-1,False)) == False:
                     continue
+                # NEW: Mark that this read covers at least one SNP position
+                gene.markReadCoveredSNP()
                 remainingResidueIsEqualToOriginal = (False, False)      #1/2M3D2/1M, must be both True or False to be res
                 for queryIndex in tuple(mapOfInterest[pos-1]):
                     if (queryIndex == "-") or (queryIndex == None):

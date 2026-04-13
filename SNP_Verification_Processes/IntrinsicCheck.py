@@ -24,6 +24,10 @@ def IntrinsicCheck(read, gene, map_of_interest, seq_of_interest, config):
     #                                   portion encountered so far are present in query
     current_must, all = first_info
     aligned_portion_has_all_musts = True
+    
+    # NEW: Track positions confirmed in this read
+    # We only add these to the gene if the read has WT at ALL covered Must positions
+    positions_confirmed_this_read = []
 
     while((current_must != None) and (current_must.getPos() <= end)):
         # query_has_must:               becomes True if 'must' amino/nucleic acid is found in query
@@ -60,9 +64,19 @@ def IntrinsicCheck(read, gene, map_of_interest, seq_of_interest, config):
         if not(query_has_must): 
             aligned_portion_has_all_musts = False
             break
+        else:
+            # Record this position as having WT (we'll only add to gene if ALL covered positions have WT)
+            positions_confirmed_this_read.append(current_must.getPos())
         
         # Go to next 'must' amino/nucleic acid
         current_must = current_must.getNext()
+
+    # NEW: CRITICAL FIX - Only add confirmed positions if this read had WT at ALL covered Must positions
+    # This prevents mixing information from resistant and susceptible variants
+    # A read that has WT at position A but mutation at position B is from a SUSCEPTIBLE variant,
+    # so we should NOT use its confirmation of position A
+    if aligned_portion_has_all_musts and len(positions_confirmed_this_read) > 0:
+        gene.addConfirmedMustPositions(positions_confirmed_this_read)
 
     # all:  now indicates whether first 'must' encountered in the aligned portion is first 'must' of the overall reference 
     #       sequence and last 'must' encountered in the aligned portion is last 'must' of the overall reference sequence
@@ -75,5 +89,3 @@ def IntrinsicCheck(read, gene, map_of_interest, seq_of_interest, config):
     else:
         gene.addDetails(read, "Some")
     return True
-
-

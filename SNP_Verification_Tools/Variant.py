@@ -121,3 +121,16 @@ class IntrinsicVariant:
                 return (this.list_of_musts[pos], False)
         return None
 
+    # NEW METHOD: Get all required "Must" positions
+    def getAllRequiredPositions(this):
+        """Returns a set of all positions that must have wild-type for intrinsic resistance"""
+        return set(this.list_of_musts.keys())
+    
+    # NEW METHOD: Get positions between begin and end
+    def getMustPositionsBetween(this, begin, end):
+        """Returns a set of 'Must' positions that fall between begin and end"""
+        positions = set()
+        for pos in this.list_of_musts.keys():
+            if begin <= pos <= end:
+                positions.add(pos)
+        return positions

@@ -57,6 +57,15 @@ class Gene:
             this.rRNA = True
 
             this.long_indel = 0
+            
+            # NEW: Track confirmed N-tuple variants across reads
+            # Key = variant string (e.g., "Mult:Mis:E52K;Mis:I77L")
+            # Value = set of confirmed mutation positions for that variant
+            this.confirmed_ntuple_positions = dict()
+            
+            # NEW: Track reads that covered any SNP position (for percentage calculation)
+            this.reads_covering_snp = 0
+            this.current_read_covered_snp = False
 
     # Info retrieval functions
         # Determined by gene category: normal, frameshift, suppressible, hypersusceptible, or intrinsic
@@ -113,6 +122,28 @@ class Gene:
             for index in range(len(this.output_info)):
                 this.output_info[index] = 0
             this.additional_info.clear()
+            # NEW: Also clear N-tuple tracking
+            this.confirmed_ntuple_positions.clear()
+            # NEW: Also clear SNP coverage tracking
+            this.reads_covering_snp = 0
+            this.current_read_covered_snp = False
+
+        # NEW: Mark that the current read covered at least one SNP position
+        def markReadCoveredSNP(this):
+            """Mark that current read covers at least one SNP position"""
+            this.current_read_covered_snp = True
+        
+        # NEW: Finalize coverage tracking for current read (call after processing each read)
+        def finalizeReadCoverage(this):
+            """Call after processing each read to finalize SNP coverage count"""
+            if this.current_read_covered_snp:
+                this.reads_covering_snp += 1
+            this.current_read_covered_snp = False
+        
+        # NEW: Get count of reads that covered any SNP position
+        def getReadsCoveringSNP(this):
+            """Return count of reads that covered at least one SNP position"""
+            return this.reads_covering_snp
 
         # Increments count for mutation type defined by index
         # Index 0 will only be used when analyzing a new alignemnt
@@ -253,6 +284,33 @@ class Gene:
             return None
         def resetForNextRead(this):
             return None
+        
+        # NEW: N-tuple cross-read tracking methods
+        def addConfirmedNtuplePosition(this, variant_key, position):
+            """Add a confirmed mutation position for an N-tuple variant"""
+            if variant_key not in this.confirmed_ntuple_positions:
+                this.confirmed_ntuple_positions[variant_key] = set()
+            this.confirmed_ntuple_positions[variant_key].add(position)
+        
+        def getNtupleConfirmationStatus(this, variant_key, required_positions):
+            """Check if all required positions for an N-tuple have been confirmed"""
+            if variant_key not in this.confirmed_ntuple_positions:
+                return False
+            confirmed = this.confirmed_ntuple_positions[variant_key]
+            return confirmed >= required_positions  # Set comparison: confirmed is superset
+        
+        def anyNtupleFullyConfirmed(this):
+            """Check if any N-tuple variant has been fully confirmed across reads"""
+            for ntuple in this.list_of_ntuples:
+                variant_key = ntuple.condensedInfo()[-1]
+                required_positions = set()
+                for mt in ntuple.list_of_mutations:
+                    if hasattr(mt, 'position_ACT') and mt.position_ACT > 0:
+                        required_positions.add(mt.position_ACT)
+                if len(required_positions) > 0:
+                    if this.getNtupleConfirmationStatus(variant_key, required_positions):
+                        return True
+            return False
 
 class Protein(Gene):
     # Subclass of Gene
@@ -526,9 +584,51 @@ class Intrinsic(Gene):
         this.intrinsic_variant_info = None
         this.output_info = [0]*10
         this.tag = 'I'
+        # NEW: Track which "Must" positions have been confirmed with wild-type across all reads
+        # Only positions from "clean" reads (no mutations at any covered Must position) are added
+        this.confirmed_must_positions = set()
 
     def getFirstMustBetweenParams(this, begin, end):
         return this.intrinsic_variant_info.getFirstMustBetweenParams(begin, end)
+    
+    # NEW: Add confirmed positions (only call this for reads with no mutations at covered positions)
+    def addConfirmedMustPositions(this, positions):
+        """Add positions that were confirmed to have wild-type from a clean read"""
+        this.confirmed_must_positions.update(positions)
+    
+    # NEW: Get all required positions
+    def getAllRequiredPositions(this):
+        """Get set of all positions required for intrinsic resistance"""
+        if this.intrinsic_variant_info is None:
+            return set()
+        return this.intrinsic_variant_info.getAllRequiredPositions()
+    
+    # NEW: Check if all required positions have been confirmed across all reads
+    def allRequiredPositionsConfirmed(this):
+        """Check if all required Must positions have been confirmed with wild-type"""
+        required = this.getAllRequiredPositions()
+        if len(required) == 0:
+            return False
+        return this.confirmed_must_positions >= required  # confirmed is superset of required
+    
+    # NEW: Get confirmation status for reporting
+    def getConfirmationStatus(this):
+        """Returns tuple: (all_confirmed, some_confirmed, confirmed_count, required_count)"""
+        required = this.getAllRequiredPositions()
+        return (
+            this.allRequiredPositionsConfirmed(),
+            len(this.confirmed_must_positions) > 0,
+            len(this.confirmed_must_positions),
+            len(required)
+        )
+    
+    # Override clearOutputInfo to also clear position tracking
+    def clearOutputInfo(this):
+        for index in range(len(this.output_info)):
+            this.output_info[index] = 0
+        this.additional_info.clear()
+        # Also clear position tracking
+        this.confirmed_must_positions = set()
 
     def createAdditionalInfoHeader(this, header):
         header.update({"All residues in query": None})
@@ -590,5 +690,3 @@ class IntrinsicProtein(Protein, Intrinsic):
     def createAdditionalInfoHeader(this, header):
         Intrinsic.createAdditionalInfoHeader(this, header)
         Protein.createAdditionalInfoHeader(this, header)
-
-
