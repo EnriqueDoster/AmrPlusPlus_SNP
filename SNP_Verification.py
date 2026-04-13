@@ -24,19 +24,6 @@ import pandas as pd
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor as ppe
 
-# from argparse import ArgumentParser
-
-# def parse_args():
-#     parser = ArgumentParser()
-#     parser.add_argument('--amr', default='true', choices=['true', 'false'])
-#     parser.add_argument('--bam', required=True)
-#     parser.add_argument('--outdir', required=True)
-#     parser.add_argument('--mt_and_wt', default='true', choices=['true', 'false'])
-#     parser.add_argument('--detailed_output', default='false', choices=['true', 'false'])
-#     parser.add_argument('--count_matrix') #?
-#     parser.add_argument('--count_matrix_final') #?
-#     return parser.parse_args()
-
 def parse_config():
 # Define Command Line Arguments and Read Config
     configFile = "config.ini"
@@ -54,7 +41,7 @@ def parse_config():
         
         --mt_and_wt:            false by default, used in case of insertion leading to presence of both mt and wt; if true, mark as resistant; if false, mark as susceptible
         --output_reads:         false by default, output list of resistant reads per gene
-        --detailed_output:      false by default, determines whether a more detailed output will be given; can be either 'false', 'all', or include a list of accessions seperated by commas
+        --detailed_output:      false by default, determines whether a more detailed output will be given; can be either 'false', 'true', 'all', or include a list of accessions seperated by commas
         --count_matrix:         count matrix that will be updated if amrplusplus is true
         --count_matrix_final:   the file where the updated count matrix will be found if amrplusplus is true
         
@@ -110,7 +97,9 @@ def parse_config():
         elif opt == "-o":
             if i == 0:
                 config.read(configFile)
-            config['FOLDERS']['MAIN_OUTPUT_FOLDER'] = arg
+            # Ensure output folder path ends with /
+            output_folder = arg if arg.endswith('/') else arg + '/'
+            config['FOLDERS']['MAIN_OUTPUT_FOLDER'] = output_folder
         elif opt == "-a":
             if i == 0:
                 config.read(configFile)
@@ -132,10 +121,14 @@ def parse_config():
         elif opt =="--detailed_output":
             if i == 0:
                 config.read(configFile)
-            if arg != "false":
+            # FIX #1: Handle 'true', 'True', 'all' correctly
+            # Only set argList if it's a comma-separated list of specific accessions
+            if arg.lower() not in ['false']:
                 config['SETTINGS']['DETAILED'] = "true"
-                if arg != "all":
+                if arg.lower() not in ['true', 'all']:
+                    # It's a comma-separated list of specific accessions to filter
                     argList = arg.split(',')
+                # If 'true' or 'all', argList stays empty = no filtering, process all genes
         elif opt =="--output_reads":
             if i == 0:
                 config.read(configFile)
@@ -147,7 +140,9 @@ def parse_config():
             if i == 0:
                 config.read(configFile)
             if not(countMatrixFinal):
-                config['OUTPUT_FILES']['COUNT_MATRIX_FINAL'] = arg
+                # Use only the basename for output, not the full path
+                # This prevents issues when input is "../file.csv"
+                config['OUTPUT_FILES']['COUNT_MATRIX_FINAL'] = os.path.basename(arg)
             config['SOURCE_FILES']['COUNT_MATRIX'] = arg
         elif opt == "--count_matrix_final":
             if i == 0:
@@ -181,6 +176,8 @@ def parse_config():
 
 def dir_check(config):
     # Verify existance of folders 
+    if not(os.path.exists(config['FOLDERS']['MAIN_OUTPUT_FOLDER'])):
+        os.makedirs(config['FOLDERS']['MAIN_OUTPUT_FOLDER'])
     if not(os.path.exists(config['FOLDERS']['SAMPLE_DETAILED_OUTPUT'])):
         os.makedirs(config['FOLDERS']['SAMPLE_DETAILED_OUTPUT'])
     if not(os.path.exists(config['FOLDERS']['TEMP'])):
@@ -260,22 +257,110 @@ def process_genes(config, argList, gene_dict):
     return results
 
 
-# Function that appends gene.getOutputInfo() to output file
-def appendGeneOutputInfo(name, output_info, csvwriter, countMatrix, config):
+def appendGeneOutputInfo(name, output_info, csvwriter, countMatrix, config, gene=None, stats=None):
+    """
+    Appends gene output info to CSV and updates count matrix.
+    
+    PERCENTAGE-BASED CALCULATION:
+    - percentage = reads_with_SNP_confirmed / reads_that_covered_any_SNP_position
+    - new_count = percentage × original_AMR++_count
+    
+    This gives an accurate estimate of what fraction of total alignments 
+    are from organisms with the resistance SNP.
+    """
     new_row = [name]
     new_row.extend(output_info)
     csvwriter.writerow(new_row)
 
     # Update count matrix if previously found in AMR++
-    if config.getboolean('SETTINGS', 'AMRPLUSPLUS'):
-        if name in list(countMatrix['gene_accession'].values):
-            index = countMatrix['gene_accession'][countMatrix['gene_accession']==name].index[0]
-            prevResCount = countMatrix.loc[index, config['FULL_FILE_NAMES']['SAMPLE']]
+    if config.getboolean('SETTINGS', 'AMRPLUSPLUS') and countMatrix is not None:
+        sample_col = config['FULL_FILE_NAMES']['SAMPLE']
+        
+        # Check if sample column exists
+        if sample_col not in countMatrix.columns:
+            if stats is not None and stats.get('sample_col_warning', 0) == 0:
+                print(f"WARNING: Sample column '{sample_col}' not found in count matrix!")
+                stats['sample_col_warning'] = 1
+            return
+        
+        # Check if gene is in matrix
+        matching_rows = countMatrix[countMatrix['gene_accession'] == name]
+        
+        if len(matching_rows) > 0:
+            index = matching_rows.index[0]
+            prevResCount = countMatrix.loc[index, sample_col]
+            
+            # Track that we found a matching gene
+            if stats is not None:
+                stats['genes_found_in_matrix'] = stats.get('genes_found_in_matrix', 0) + 1
+            
             if prevResCount != 0:
-                newCount = output_info[1]
-                newCount += (output_info[2] + output_info[5]) if len(output_info) == 10 else 0  #If gene is intrinsic 
-                                                                                                #Adds 'some' and 'acquired' counts                 
-                countMatrix.loc[index, config['FULL_FILE_NAMES']['SAMPLE']] = newCount
+                is_intrinsic = (len(output_info) == 10)
+                reads_analyzed = output_info[0]  # Total reads that were analyzed for this gene
+                
+                # Get the actual count of reads that covered any SNP position
+                reads_covering_snp = 0
+                if gene is not None and hasattr(gene, 'getReadsCoveringSNP'):
+                    reads_covering_snp = gene.getReadsCoveringSNP()
+                
+                if is_intrinsic:
+                    reads_with_snp = output_info[1] + output_info[2]  # All + Some = resistant
+                    reads_covering_snp_intrinsic = output_info[1] + output_info[2] + output_info[4]
+                    if reads_covering_snp_intrinsic > reads_covering_snp:
+                        reads_covering_snp = reads_covering_snp_intrinsic
+                else:
+                    reads_with_snp = output_info[1]  # Resistant count
+                
+                # Calculate percentage
+                if reads_covering_snp > 0:
+                    percentage = reads_with_snp / reads_covering_snp
+                elif reads_analyzed > 0:
+                    percentage = reads_with_snp / reads_analyzed
+                    reads_covering_snp = reads_analyzed
+                else:
+                    percentage = 0.0
+                
+                # Apply percentage to original count
+                newCount = int(round(percentage * prevResCount))
+                
+                # What would original code have done?
+                if is_intrinsic:
+                    original_would_be = output_info[1] + output_info[2] + output_info[5]
+                else:
+                    original_would_be = output_info[1]
+                
+                # Track statistics
+                if stats is not None:
+                    stats['total_with_counts'] = stats.get('total_with_counts', 0) + 1
+                    
+                    if reads_with_snp > 0:
+                        stats['snp_confirmed'] = stats.get('snp_confirmed', 0) + 1
+                    else:
+                        stats['snp_not_confirmed'] = stats.get('snp_not_confirmed', 0) + 1
+                    
+                    # Collect gene-level stats for output file
+                    if 'gene_stats' not in stats:
+                        stats['gene_stats'] = []
+                    
+                    stats['gene_stats'].append({
+                        'sample_name': config['FULL_FILE_NAMES']['SAMPLE'],
+                        'gene_name': name,
+                        'gene_type': 'Intrinsic' if is_intrinsic else 'Normal',
+                        'original_amrplusplus_count': prevResCount,
+                        'total_reads_analyzed': reads_analyzed,
+                        'reads_covering_snp_position': reads_covering_snp,
+                        'reads_with_snp_confirmed': reads_with_snp,
+                        'percentage': percentage,
+                        'original_code_would_set': original_would_be,
+                        'new_count_percentage_based': newCount,
+                        'snp_confirmed': reads_with_snp > 0
+                    })
+                
+                countMatrix.loc[index, sample_col] = newCount
+        else:
+            # Gene not found in matrix
+            if stats is not None:
+                stats['genes_not_in_matrix'] = stats.get('genes_not_in_matrix', 0) + 1
 
 
 def create_output(config, argList, gene_variant_dict):
@@ -323,17 +408,27 @@ def create_output(config, argList, gene_variant_dict):
                 readsOutput.write("Gene Header, List of Reads\n")
 
         # Run through results
+        genes_processed = 0
+        genes_with_reads = 0
+        
+        # Stats for tracking count changes
+        stats = {}
+        
         for name, gene in gene_variant_dict.items():
             if (len(argList) != 0) and (gene.getName().split("|")[0] not in argList):
                 continue
             
-            # Add to correct output
+            genes_processed += 1
+            if gene.getOutputInfo()[0] > 0:
+                genes_with_reads += 1
+            
+            # Add to correct output - pass gene object and stats for tracking
             tag = gene.getGeneTag()
-            if   tag == 'N': appendGeneOutputInfo(name, gene.getOutputInfo(), nwriter, countMatrix, config)
-            elif tag == 'F': appendGeneOutputInfo(name, gene.getOutputInfo(), fwriter, countMatrix, config)
-            elif tag == 'H': appendGeneOutputInfo(name, gene.getOutputInfo(), hwriter, countMatrix, config)
-            elif tag == 'S': appendGeneOutputInfo(name, gene.getOutputInfo(), swriter, countMatrix, config)
-            else:            appendGeneOutputInfo(name, gene.getOutputInfo(), iwriter, countMatrix, config)
+            if   tag == 'N': appendGeneOutputInfo(name, gene.getOutputInfo(), nwriter, countMatrix, config, gene, stats)
+            elif tag == 'F': appendGeneOutputInfo(name, gene.getOutputInfo(), fwriter, countMatrix, config, gene, stats)
+            elif tag == 'H': appendGeneOutputInfo(name, gene.getOutputInfo(), hwriter, countMatrix, config, gene, stats)
+            elif tag == 'S': appendGeneOutputInfo(name, gene.getOutputInfo(), swriter, countMatrix, config, gene, stats)
+            else:            appendGeneOutputInfo(name, gene.getOutputInfo(), iwriter, countMatrix, config, gene, stats)
 
             # Print more detailed output if requested
             if config.getboolean('SETTINGS', 'DETAILED') and (gene.getOutputInfo()[0] > 0):
@@ -347,12 +442,67 @@ def create_output(config, argList, gene_variant_dict):
             
             gene.clearOutputInfo()
 
+        # FIX #2: Zero out RequiresSNPConfirmation genes that weren't in SNPinfo database
+        # These genes have alignments but couldn't be verified because they lack SNP info
+        if config.getboolean('SETTINGS', 'AMRPLUSPLUS'):
+            sample_col = config['FULL_FILE_NAMES']['SAMPLE']
+            zeroed_not_in_db = 0
+            total_not_in_db = 0
+            genes_zeroed_list = []
+            
+            for idx, row in countMatrix.iterrows():
+                gene_name = row['gene_accession']
+                if 'RequiresSNPConfirmation' in str(gene_name) and gene_name not in gene_variant_dict:
+                    total_not_in_db += 1
+                    original_count = row[sample_col]
+                    if original_count != 0:
+                        zeroed_not_in_db += 1
+                        genes_zeroed_list.append({
+                            'gene_name': gene_name,
+                            'original_count': original_count,
+                            'reason': 'Not in SNPinfo database'
+                        })
+                    countMatrix.loc[idx, sample_col] = 0
+            
+            # Write gene coverage stats to CSV file
+            gene_stats_file = config['FOLDERS']['SAMPLE_OUTPUT'] + 'snp_coverage_stats.csv'
+            if 'gene_stats' in stats and len(stats['gene_stats']) > 0:
+                gene_stats_df = pd.DataFrame(stats['gene_stats'])
+                gene_stats_df.to_csv(gene_stats_file, index=False)
+            
+            # Write summary stats to CSV file
+            summary_file = config['FOLDERS']['SAMPLE_OUTPUT'] + 'snp_verification_summary.csv'
+            summary_data = {
+                'sample_name': [sample_col],
+                'genes_in_snpinfo_database': [len(gene_variant_dict)],
+                'genes_processed': [genes_processed],
+                'genes_with_reads': [genes_with_reads],
+                'genes_found_in_count_matrix': [stats.get('genes_found_in_matrix', 0)],
+                'genes_not_found_in_matrix': [stats.get('genes_not_in_matrix', 0)],
+                'genes_with_nonzero_counts': [stats.get('total_with_counts', 0)],
+                'genes_with_snp_confirmed': [stats.get('snp_confirmed', 0)],
+                'genes_with_snp_not_confirmed': [stats.get('snp_not_confirmed', 0)],
+                'snpconfirmation_genes_not_in_db': [total_not_in_db],
+                'genes_zeroed_not_in_db': [zeroed_not_in_db]
+            }
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_csv(summary_file, index=False)
+            
+            # Print brief summary to console
+            print(f"\nSNP Verification Complete.")
+            print(f"  Genes with SNP confirmed: {stats.get('snp_confirmed', 0)}")
+            print(f"  Genes with SNP NOT confirmed: {stats.get('snp_not_confirmed', 0)}")
+            print(f"  Summary written to: {summary_file}")
+            print(f"  Gene stats written to: {gene_stats_file}")
+
     # Print count matrix
     if config.getboolean('SETTINGS', 'AMRPLUSPLUS'): countMatrix.to_csv(config['FULL_FILE_NAMES']['COUNT_MATRIX_FINAL'], index=False)
     sys.exit(0)
 
 
 def main():
+    print("SNP_Verification.py - Running with percentage-based count adjustment")
+    
     config, argList = parse_config()
     dir_check(config)
     gene_dict = parse_snp_info(config)
