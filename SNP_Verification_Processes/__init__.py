@@ -54,6 +54,10 @@ def verify(read, gene, config):
 def FinalCount(gene, read):
     gene.redefineLastTupleInfo(read)
     additionalInfo = gene.getLastTupleInfo()
+    
+    # NEW: Finalize SNP coverage tracking for this read
+    gene.finalizeReadCoverage()
+    
     def nTypeCount(): 
         insertion = False
         deletion  = False
